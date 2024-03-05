@@ -42,66 +42,140 @@ library(patchwork) #merge several GGPLOT graphs in one page
 shapefile_path <- "C:/Users/a.batlle/Documents/local_I-CISK/Ambit/50km_Land_GuadalquivirPedroches/50km_Land_GuadalquivirPedroches.shp"
 study_area <- st_read(shapefile_path)
 
-#Get a list of METEO data files to process.
-# List all CSV files that start with "Cuarto_Bloque_Precipitacion_mensual_"
-csv_files <- list.files(path="C:/Users/a.batlle/Documents/DADES/AEMET/Miquel_2023/dades_aemet/PETICIO_4", pattern = "^Cuarto_Bloque_Precipitacion_mensual_.*\\.csv$", full.names=TRUE )
+#___________________________________________________________________________________________________________________________________________
+#### AEMET API ####
+#___________________________________________________________________________________________________________________________________________
+# Get AEMET list of stations inside the study Area: 
+Met_options <- aemet_options(api_key="eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhLmJhdGxsZUBjcmVhZi51YWIuY2F0IiwianRpIjoiYWMyMGRkZWUtMDFhMS00YTYxLWFmODMtMTNiMTM2NTIyOGYwIiwiaXNzIjoiQUVNRVQiLCJpYXQiOjE2ODI2MTA0ODQsInVzZXJJZCI6ImFjMjBkZGVlLTAxYTEtNGE2MS1hZjgzLTEzYjEzNjUyMjhmMCIsInJvbGUiOiIifQ.Ml_Iri16hjadDFBgRw3ahGaPFneKuBSjIrMkNrKvbv8", 
+                             resolution = "yearly", start_date=as.Date("2000-01-01") , end_date=as.Date("2022-12-31"))
 
-# NOTE: About the pattern
-#   ^ asserts the start of the string.
-#   Segundo matches the literal characters "Segundo" at the beginning of the string.
-#   .* matches any character (except for line terminators) zero or more times.
-#   \.csv matches the literal characters ".csv". The . is escaped with a backslash \ because . in regular expressions usually means "match any single character", but in this case, you want to match the period character literally.
-#   $ asserts the end of the string.
+info_stations_API <- get_stations_info_from ('aemet', Met_options)
+info_stations_API <- st_transform(info_stations_API, crs=4258)
 
-# Read first element from the list to generate patterns dataframe
+stations_studyarea <- st_intersection(info_stations_API, study_area)
+list_stations <- as.character(stations_studyarea$station_id)
 
-AEMET_data <- read.csv(csv_files[1], fileEncoding = "latin1", sep = ";")
+#Access AEMET API.
 
-csv_files <- csv_files[-1] #Remove firts element from the list before starting the loop
+#Since daily data request can only be downloaded every 31 days, need to set up a recurrent request. 
+start_date_request <- as.Date("2000-01-01")
+end_date_request <- as.Date("2000-01-31")
 
-for (csv in csv_files) {
-  csv_data <- read.csv(csv, fileEncoding = "latin1", sep = ";")
+#Get firts request and the loop will append next requests to this dataset. 
+Met_options <- aemet_options(api_key="eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhLmJhdGxsZUBjcmVhZi51YWIuY2F0IiwianRpIjoiYWMyMGRkZWUtMDFhMS00YTYxLWFmODMtMTNiMTM2NTIyOGYwIiwiaXNzIjoiQUVNRVQiLCJpYXQiOjE2ODI2MTA0ODQsInVzZXJJZCI6ImFjMjBkZGVlLTAxYTEtNGE2MS1hZjgzLTEzYjEzNjUyMjhmMCIsInJvbGUiOiIifQ.Ml_Iri16hjadDFBgRw3ahGaPFneKuBSjIrMkNrKvbv8", 
+                             resolution = "daily", start_date= start_date_request, end_date=end_date_request, stations=list_stations)
+
+aemet_meteo <- get_meteo_from('aemet', Met_options)
+
+
+last_date <- as.Date("2022-12-31")
+
+
+while (end_date_request<= last_date ) {
+  start_date_request <-start_date_request + 31
+  end_date_request <- end_date_request + 31
   
-  # Merge with pattern file: 
-  AEMET_data <- rbind(AEMET_data,csv_data )
+  Met_options <- aemet_options(api_key="eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhLmJhdGxsZUBjcmVhZi51YWIuY2F0IiwianRpIjoiYWMyMGRkZWUtMDFhMS00YTYxLWFmODMtMTNiMTM2NTIyOGYwIiwiaXNzIjoiQUVNRVQiLCJpYXQiOjE2ODI2MTA0ODQsInVzZXJJZCI6ImFjMjBkZGVlLTAxYTEtNGE2MS1hZjgzLTEzYjEzNjUyMjhmMCIsInJvbGUiOiIifQ.Ml_Iri16hjadDFBgRw3ahGaPFneKuBSjIrMkNrKvbv8", 
+                               resolution = "daily", start_date= start_date_request, end_date=end_date_request, stations=list_stations)
+  
+  aemet_meteo_2 <- get_meteo_from('aemet', Met_options)
+  
+  aemet_meteo <- rbind(aemet_meteo, aemet_meteo_2)
+  
 }
-#Correct coordinates format
-AEMET_data$LONGITUD <- as.numeric(gsub(",", ".", AEMET_data$LONGITUD))
-AEMET_data$LATITUD <- as.numeric(gsub(",", ".", AEMET_data$LATITUD))
 
-# Create a spatial object from dataframe and convert to Projected CRS: ETRS89 / UTM zone 30N
-AEMET_data_sf <- st_as_sf(AEMET_data, coords = c("LONGITUD", "LATITUD"), crs = 4326)
-AEMET_data_sf <-st_transform(AEMET_data_sf, crs = 25830)
+#exporting as csv: 
+write.csv(aemet_meteo, "AEMET_meteo_2000_2022.csv" , row.names=FALSE)
+# Export data as shapefile
+st_write(aemet_meteo, "AEMETopendata_meteo_Tordera.shp")
 
 
-# Intersection with the study area: 
-StudyArea_data_sf <- st_intersection(AEMET_data_sf, study_area)
+#### END ####
 
-# Plot using ggplot to check correct clipping
-ggplot() +
-  geom_sf(data = study_area) +
-  geom_sf(data = StudyArea_data_sf) +
-  theme_minimal()
+#___________________________________________________________________________________________________________________________________________
+#### SMC Servei Meteorol?gic de Catalunya API ####
+#___________________________________________________________________________________________________________________________________________
+
+# Get SMC list of stations inside the study Area: ______________________________________________####
+# I've been recomended by Jessica Amaro Royo from SMC (api.meteocat@gencat.cat) to better make a request for all Catalunya and make a subset after.  
+
+Met_options <- meteocat_options(api_key="rGld0Hyrt69G4Czn2M4pHaFvuO39KKX3azYU3I6t", 
+                                resolution = "daily", start_date=as.Date("2001-01-01"))
+
+info_stations_API <- get_stations_info_from ('meteocat', Met_options)
+info_stations_API <- st_transform(info_stations_API, crs=4258)
+
+stations_studyarea <- st_intersection(info_stations_API, study_area)
+list_stations <- as.character(stations_studyarea$station_id)
+
+#Access SMC API.
+start_date_request <- as.Date("2000-01-01") 
+#end_date_request <- as.Date("2000-01-31")
+
+Met_options <- meteocat_options(api_key="rGld0Hyrt69G4Czn2M4pHaFvuO39KKX3azYU3I6t", 
+                                resolution = "daily", start_date= start_date_request)
+
+meteocat_meteo <- get_meteo_from('meteocat', Met_options) #API return are month by month
 
 
-StudyArea_data <- as.data.frame(StudyArea_data_sf)
-#  # Fix Coordinates Fields
-# Rebuild latitude and longitude attributes from geometry
-StudyArea_data <- StudyArea_data %>%
-  separate(geometry, into=c("XPR", "YPR"), sep=" ")
-#Correct Coordinate values
-StudyArea_data$XPR <- gsub("^c\\(", "", StudyArea_data$XPR)
-StudyArea_data$XPR <- gsub(",", "", StudyArea_data$XPR)
-StudyArea_data$YPR <- gsub("\\)", "", StudyArea_data$YPR)
+last_date <- as.Date("2022-12-01")
 
-# Create New Field YYYYMM
-StudyArea_data <- StudyArea_data %>% 
-  mutate(YYYYMMdate = make_date(year = AÑO, month = MES))
+while (start_date_request<= last_date ) {
+  start_date_request <-start_date_request  %m+% months(1)
+  #Get stations List for the month
+  Met_options <- meteocat_options(api_key="rGld0Hyrt69G4Czn2M4pHaFvuO39KKX3azYU3I6t", 
+                                  resolution = "daily", start_date=start_date_request)
+  
+  info_stations_API <- get_stations_info_from ('meteocat', Met_options)
+  info_stations_API <- st_transform(info_stations_API, crs=4258)
+  
+  stations_studyarea <- st_intersection(info_stations_API, study_area)
+  list_stations <- as.character(stations_studyarea$station_id)
+  
+  # Get meteorological data
+  Met_options <- meteocat_options(api_key="rGld0Hyrt69G4Czn2M4pHaFvuO39KKX3azYU3I6t", 
+                                  resolution = "daily", start_date= start_date_request, stations=list_stations)
+  
+  meteocat_meteo_2 <- get_meteo_from('meteocat', Met_options)
+  #meteocat_meteo_2$mean_wind_speed <- NA #Add field when needed
+  meteocat_meteo <- rbind(meteocat_meteo, meteocat_meteo_2)
+  
+}
+meteocat_meteo_2$mean_wind_speed <- NA
+meteocat_meteo$mean_wind_direction <- NA
+meteocat_meteo$max_relative_humidity <- NA
+#exporting as csv: 
+write.csv(meteocat_meteo, "METEOCAT_meteo_2008_2022.csv" , row.names=FALSE)
 
-StudyArea_data$YYYYMM <- paste(StudyArea_data$AÑO,sprintf("%02d", StudyArea_data$MES), sep="-") #sprintf("%02d", df$Mes) is used to format the month values as two digits, padding single-digit months with a leading zero if necessary.
+#Access SMC API. For all stations.______________________________________________________________#### 
 
-# Correct variable name
-StudyArea_data <- StudyArea_data %>% rename(PL = PMES77) # Rename the column from "PMES77" to "PL"
+start_date_request <- as.Date("2000-01-01") 
+start_date_request <- as.Date("2001-11-01")
+
+Met_options <- meteocat_options(api_key="rGld0Hyrt69G4Czn2M4pHaFvuO39KKX3azYU3I6t", 
+                                resolution = "daily", start_date= start_date_request)
+
+meteocat_meteo <- get_meteo_from('meteocat', Met_options) #API return are month by month
+
+write.csv(meteocat_meteo, paste0("SMC/SMC_DadesDiàries_serie 2000-2022/Daily_data_RAW/meteocat_",start_date_request,"_v2.csv")) #store in a .csv
+last_date <- as.Date("2022-12-01")
+
+start_date_request <- as.Date("2003-09-01") # Data download stopped, restart here. Missing data 2003-10/11/12
+start_date_request <- as.Date("2001-09-01") #Missing MIn temperature redownloaded 
+start_date_request <- as.Date("2020-07-01") # Missing max_relative_humidity SMC data is like this (added NA field manually)
+
+while (start_date_request<= last_date ) {
+  
+  start_date_request <-start_date_request  %m+% months(1)
+  
+  # Get meteorological data
+  Met_options <- meteocat_options(api_key="rGld0Hyrt69G4Czn2M4pHaFvuO39KKX3azYU3I6t", 
+                                  resolution = "daily", start_date= start_date_request)
+  
+  meteocat_meteo <- get_meteo_from('meteocat', Met_options)
+  write.csv(meteocat_meteo, paste0("SMC/meteocat_",start_date_request,".csv"))
+}
+
 
 
 # QUALITY CONTROL ______________________________________________________________
